@@ -17,7 +17,6 @@ new_mt.__index = function(_, key)
     return nil
 end
 
--- Added __newindex to ensure C++ injected globals (like saveinstance) are handled correctly
 new_mt.__newindex = function(t, k, v)
     if type(old_mt) == "table" and old_mt.__newindex then
         old_mt.__newindex(t, k, v)
@@ -43,6 +42,13 @@ task.spawn(function()
     local Players = game:GetService("Players")
     repeat task.wait() until Players.LocalPlayer
     print(string.format("[+] Logged in as: %s (UserID: %d)", Players.LocalPlayer.Name, Players.LocalPlayer.UserId))
+    
+    local placeId = game.PlaceId
+    local gameName = "Unknown Game"
+    pcall(function()
+        gameName = game:GetService("MarketplaceService"):GetProductInfo(placeId).Name
+    end)
+    print("BLUBERII_GAME|" .. placeId .. "|" .. gameName)
 end)
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -1275,27 +1281,32 @@ pcall(Bluberii.appendfile, "bluberii_console.log", "[BLUBERII_ATTACHED]\n")
 
 -- Wait for C++ to inject saveinstance, then wrap it
 task.spawn(function()
-    repeat task.wait() until rawget(script_env, "saveinstance") or rawget(_G, "saveinstance") or rawget(Bluberii, "saveinstance")
+    local timeout = tick() + 15
+    repeat task.wait() until type(rawget(script_env, "saveinstance")) == "function" or type(saveinstance) == "function" or tick() > timeout
     
-    local original = rawget(script_env, "saveinstance") or rawget(_G, "saveinstance") or rawget(Bluberii, "saveinstance")
-    local wrapped = function(...)
-        print("[*] Starting saveinstance...")
-        local success, err = pcall(original, ...)
-        if not success then
-            warn("[-] saveinstance failed: " .. tostring(err))
-            return
+    local original = rawget(script_env, "saveinstance") or saveinstance
+    if type(original) == "function" then
+        local wrapped = function(...)
+            print("[*] Starting saveinstance...")
+            local success, err = pcall(original, ...)
+            if not success then
+                warn("[-] saveinstance failed: " .. tostring(err))
+                return
+            end
+            
+            print("[*] Save complete. Attempting to copy to Roblox Studio...")
+            local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
+            if ok and res == "true" then
+                print("[+] Successfully copied meshes and textures to Studio!")
+            else
+                print("[-] oh roblox studio wasnt detected, meshes/textures will come out empty")
+            end
         end
         
-        print("[*] Save complete. Attempting to copy to Roblox Studio...")
-        local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
-        if ok and res == "true" then
-            print("[+] Successfully copied meshes and textures to Studio!")
-        else
-            print("[-] oh roblox studio wasnt detected, meshes/textures will come out empty")
-        end
+        rawset(script_env, "saveinstance", wrapped)
+        rawset(_G, "saveinstance", wrapped)
+        rawset(Bluberii, "saveinstance", wrapped)
+    else
+        warn("[-] saveinstance is not loaded in the game environment!")
     end
-    
-    rawset(script_env, "saveinstance", wrapped)
-    rawset(_G, "saveinstance", wrapped)
-    rawset(Bluberii, "saveinstance", wrapped)
 end)
