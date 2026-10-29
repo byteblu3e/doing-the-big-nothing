@@ -38,32 +38,32 @@ end)
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local b64lookup = {}
-for i = 1, #b64chars do b64lookup[b64chars:sub(i,i)] = i - 1 end
+for i = 1, #b64chars do b64lookup[b64chars:sub(i, i)] = i - 1 end
 
 local function base64encode(data)
     if type(data) ~= "string" then return nil end
     local result = {}
     for i = 1, #data, 3 do
-        local a, b, c = data:byte(i, i+2)
+        local a, b, c = data:byte(i, i + 2)
         local n = (a or 0) * 65536 + (b or 0) * 256 + (c or 0)
         local c1 = math.floor(n / 262144) % 64
         local c2 = math.floor(n / 4096) % 64
         local c3 = math.floor(n / 64) % 64
         local c4 = n % 64
-        table.insert(result, b64chars:sub(c1+1, c1+1))
-        table.insert(result, b64chars:sub(c2+1, c2+1))
-        if b then table.insert(result, b64chars:sub(c3+1, c3+1)) else table.insert(result, '=') end
-        if c then table.insert(result, b64chars:sub(c4+1, c4+1)) else table.insert(result, '=') end
+        table.insert(result, b64chars:sub(c1 + 1, c1 + 1))
+        table.insert(result, b64chars:sub(c2 + 1, c2 + 1))
+        if b then table.insert(result, b64chars:sub(c3 + 1, c3 + 1)) else table.insert(result, '=') end
+        if c then table.insert(result, b64chars:sub(c4 + 1, c4 + 1)) else table.insert(result, '=') end
     end
     return table.concat(result)
 end
 
 local function base64decode(data)
     if type(data) ~= "string" then return nil end
-    data = data:gsub('[^'..b64chars..'=]', '')
+    data = data:gsub('[^' .. b64chars .. '=]', '')
     local result = {}
     for i = 1, #data, 4 do
-        local c1, c2, c3, c4 = data:sub(i, i+3):byte(1, 4)
+        local c1, c2, c3, c4 = data:sub(i, i + 3):byte(1, 4)
         local n = (b64lookup[string.char(c1)] or 0) * 262144
                 + (b64lookup[string.char(c2)] or 0) * 4096
                 + (b64lookup[string.char(c3)] or 0) * 64
@@ -115,13 +115,13 @@ end)
 if not Bluberii.WebSocket then
     Bluberii.WebSocket = {
         connect = function(url)
-            if type(url) ~= "string" or url == "ws://" or url == "wss://" then 
-                error("WebSocket.connect: missing or invalid host", 2) 
+            if type(url) ~= "string" or url == "ws://" or url == "wss://" then
+                error("WebSocket.connect: missing or invalid host", 2)
             end
             local listeners = {}
             return {
-                Send = function(self, msg) 
-                    if listeners.Message then task.spawn(listeners.Message, msg) end 
+                Send = function(self, msg)
+                    if listeners.Message then task.spawn(listeners.Message, msg) end
                 end,
                 Close = function() end,
                 OnMessage = { Connect = function(self, fn) listeners.Message = fn end },
@@ -141,7 +141,7 @@ function Bluberii.httpget(url)
     end
 
     if native_request then
-        local ok, res = pcall(native_request, {Url = url, Method = "GET"})
+        local ok, res = pcall(native_request, { Url = url, Method = "GET" })
         if ok and res and res.Body and #res.Body > 0 then
             return res.Body
         end
@@ -314,18 +314,18 @@ function Bluberii.request(options)
         table.insert(headers, field(value))
     end
     local payload = field(url) .. field((options.Method or "GET"):upper()) .. field(tostring(count)) .. table.concat(headers) .. field(body)
-    
+
     local handle = game:GetService("HttpService"):RequestInternal({
         Url = "http://127.0.0.1:6969/http/" .. Bluberii_http_token,
         Method = "POST",
         Body = payload,
     })
-    
+
     local done, success, response = false, false, nil
     handle:Start(function(ok, result) success, response, done = ok, result, true end)
     local deadline = os.clock() + 120
     while not done and os.clock() < deadline do task.wait() end
-    
+
     if not done then error("request: request timed out", 2) end
     if type(response) ~= "table" or type(response.Body) ~= "string" then error("request: invalid bridge response", 2) end
     if not success or response.StatusCode ~= 200 then error(response.Body ~= "" and response.Body or "request: HTTP bridge failed", 2) end
@@ -343,11 +343,11 @@ function Bluberii.request(options)
     local status = tonumber(read_field(3))
     local message = read_field(4096)
     local header_count = tonumber(read_field(5))
-    
+
     if not status or status < 100 or status > 599 or not header_count or header_count < 0 or header_count % 1 ~= 0 or header_count > 8192 then
         error("request: invalid response status or headers", 2)
     end
-    
+
     local response_headers = {}
     for _ = 1, header_count do
         local name = read_field(16384)
@@ -380,10 +380,6 @@ function Bluberii.misc_request(op, payload)
     if not success or response.StatusCode ~= 200 then error(response.Body ~= "" and response.Body or op .. ": bridge failed", 3) end
     return response.Body
 end
-
-----------------------------------------------------------------------
--- LOCAL MODULE LOADING (filesystem / scripts / misc / crypt / drawing)
-----------------------------------------------------------------------
 
 local function load_module(module_name)
     local ok, src = pcall(Bluberii.readfile, module_name .. ".luau")
@@ -422,8 +418,8 @@ for _, name in ipairs({
     "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
     "getscriptclosure"
 }) do
-    if Bluberii[name] then 
-        rawset(script_env, name, Bluberii[name]) 
+    if Bluberii[name] then
+        rawset(script_env, name, Bluberii[name])
     end
 end
 
@@ -456,16 +452,12 @@ LogService.MessageOut:Connect(function(message, msg_type)
     local level = "print"
     if msg_type == Enum.MessageType.MessageWarning then level = "warn"
     elseif msg_type == Enum.MessageType.MessageError then level = "error" end
-    task.spawn(function() 
+    task.spawn(function()
         pcall(Bluberii.appendfile, "bluberii_console.log", string.format("[%s] [%s] %s\n", os.date("%H:%M:%S"), level, message))
     end)
 end)
 
 pcall(Bluberii.appendfile, "bluberii_console.log", "[BLUBERII_ATTACHED]\n")
-
-----------------------------------------------------------------------
--- WRAP saveinstance ONCE IT APPEARS (set by C++ InitScripts)
-----------------------------------------------------------------------
 
 task.spawn(function()
     local deadline = tick() + 30
