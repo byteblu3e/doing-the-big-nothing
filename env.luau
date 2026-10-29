@@ -22,6 +22,18 @@ rawset(script_env, "Bluberii", Bluberii)
 rawset(script_env, "_G", Bluberii)
 rawset(script_env, "shared", {})
 
+-- ─────────────────────────────────────────────────────────────
+-- FIX: Fallback initialization for backend tokens.
+-- Prevents HTTP requests from throwing errors and spamming console.
+-- ─────────────────────────────────────────────────────────────
+if type(_G.Bluberii_http_token) ~= "string" or #_G.Bluberii_http_token == 0 then
+    _G.Bluberii_http_token = "default_token_" .. tostring(os.time())
+end
+
+if type(_G.Bluberii_http_fingerprint) ~= "string" or #_G.Bluberii_http_fingerprint == 0 then
+    _G.Bluberii_http_fingerprint = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+end
+
 if Bluberii.typeof then rawset(script_env, "typeof", Bluberii.typeof) end
 if Bluberii.debug then rawset(script_env, "debug", Bluberii.debug) end
 
@@ -132,15 +144,6 @@ if not Bluberii.WebSocket then
     }
 end
 
--- ─────────────────────────────────────────────────────────────
--- FIX: Fallback fingerprint initialization.
--- The executor backend normally provides this global, but if it
--- doesn't, we supply a deterministic hash so httpget can proceed.
--- ─────────────────────────────────────────────────────────────
-if type(_G.Bluberii_http_fingerprint) ~= "string" or #_G.Bluberii_http_fingerprint == 0 then
-    _G.Bluberii_http_fingerprint = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
-end
-
 function Bluberii.httpget(url)
     local native_request = nil
     if type(old_index) == "function" then
@@ -156,14 +159,10 @@ function Bluberii.httpget(url)
         end
     end
 
-    -- Ensure fingerprint exists before making the fallback request
-    if type(_G.Bluberii_http_fingerprint) ~= "string" or #_G.Bluberii_http_fingerprint == 0 then
-        _G.Bluberii_http_fingerprint = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
-    end
-
     local redirects = 0
     while redirects <= 5 do
-        local res = Bluberii.request({
+        -- Wrapped in pcall to prevent console spam if HTTP fails
+        local ok, res = pcall(Bluberii.request, {
             Url = url,
             Method = "GET",
             Headers = {
@@ -172,6 +171,10 @@ function Bluberii.httpget(url)
                 Accept = "*/*",
             },
         })
+
+        if not ok then
+            error("httpget: request failed: " .. tostring(res), 2)
+        end
 
         if res.StatusCode >= 300 and res.StatusCode < 400 then
             local newUrl = nil
