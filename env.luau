@@ -17,14 +17,6 @@ new_mt.__index = function(_, key)
     return nil
 end
 
-new_mt.__newindex = function(t, k, v)
-    if type(old_mt) == "table" and old_mt.__newindex then
-        old_mt.__newindex(t, k, v)
-    else
-        rawset(t, k, v)
-    end
-end
-
 setmetatable(script_env, new_mt)
 rawset(script_env, "Bluberii", Bluberii)
 rawset(script_env, "_G", Bluberii)
@@ -42,13 +34,6 @@ task.spawn(function()
     local Players = game:GetService("Players")
     repeat task.wait() until Players.LocalPlayer
     print(string.format("[+] Logged in as: %s (UserID: %d)", Players.LocalPlayer.Name, Players.LocalPlayer.UserId))
-    
-    local placeId = game.PlaceId
-    local gameName = "Unknown Game"
-    pcall(function()
-        gameName = game:GetService("MarketplaceService"):GetProductInfo(placeId).Name
-    end)
-    print("BLUBERII_GAME|" .. placeId .. "|" .. gameName)
 end)
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -102,6 +87,17 @@ Bluberii.base64_encode = base64encode
 Bluberii.base64_decode = base64decode
 Bluberii.base64 = { encode = base64encode, decode = base64decode }
 
+rawset(script_env, "crypt", {
+    base64encode = base64encode,
+    base64decode = base64decode,
+    base64 = { encode = base64encode, decode = base64decode },
+    generatebytes = function() return "" end,
+    generatekey = function() return "" end,
+    hash = function() return "" end,
+    encrypt = function() return "" end,
+    decrypt = function() return "" end
+})
+
 task.spawn(function()
     pcall(function()
         local SoundService = game:GetService("SoundService")
@@ -146,16 +142,12 @@ function Bluberii.httpget(url)
 
     if native_request then
         local ok, res = pcall(native_request, {Url = url, Method = "GET"})
-        if ok and type(res) == "table" and type(res.Body) == "string" then
-            if #res.Body > 0 then
-                return res.Body
-            end
+        if ok and res and res.Body and #res.Body > 0 then
+            return res.Body
         end
     end
 
-    if type(Bluberii_http_fingerprint) ~= "string" then 
-        Bluberii_http_fingerprint = "bypassed_fingerprint" 
-    end
+    assert(type(Bluberii_http_fingerprint) == "string" and #Bluberii_http_fingerprint > 0, "httpget: fingerprint is not initialized")
 
     local redirects = 0
     while redirects <= 5 do
@@ -303,8 +295,7 @@ end
 function Bluberii.request(options)
     assert(type(options) == "table", "request: expected table")
     local url = options.Url
-    assert(type(url) == "string", "request: expected a URL string")
-    assert(#url > 0 and #url <= 4096, "request: expected a URL string up to 4096 bytes")
+    assert(type(url) == "string" and #url > 0 and #url <= 4096, "request: expected a URL string up to 4096 bytes")
     assert(url:sub(1, 7) == "http://" or url:sub(1, 8) == "https://", "request: expected http:// or https://")
     assert(options.Method == nil or type(options.Method) == "string", "request: expected Method string")
     assert(options.Headers == nil or type(options.Headers) == "table", "request: expected Headers table")
@@ -312,11 +303,7 @@ function Bluberii.request(options)
     local body = options.Body or ""
     assert(#body <= 10 * 1024 * 1024, "request: body exceeds 10 MiB")
 
-    local function field(value) 
-        value = tostring(value)
-        return tostring(#value) .. "\n" .. value 
-    end
-    
+    local function field(value) return tostring(#value) .. "\n" .. value end
     local headers, count, header_size = {}, 0, 0
     for name, value in pairs(options.Headers or {}) do
         assert(type(name) == "string" and type(value) == "string", "request: header names and values must be strings")
@@ -394,836 +381,31 @@ function Bluberii.misc_request(op, payload)
     return response.Body
 end
 
-print("[*] Loading internal modules...")
-local misc_request = Bluberii.misc_request
+local GITHUB_BASE = "https://raw.githubusercontent.com/byteblu3e/Bluberri-Decompiler/refs/heads/main/"
 
--- =========================================================================
--- FILESYSTEM MODULE (Inlined)
--- =========================================================================
-local CONSOLE_LOG_PATH = "bluberii_console.log"
-local VirtualFiles   = {}
-local VirtualFolders = { [""] = true }
-
-local BLOCKED_EXTENSIONS = {
-    ".exe", ".com", ".scr", ".pif", ".cpl", ".msc", ".dll", ".bat", ".cmd", ".ps1",
-    ".psd1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".scf", ".lnk",
-    ".zip", ".rar", ".7z", ".cab", ".iso", ".img", ".jar", ".xml", ".msi", ".msp",
-    ".reg", ".inf", ".url", ".vhd", ".vhdx"
-}
-
-local function normalize(path)
-    return path:gsub("\\", "/"):gsub("^%./", ""):gsub("/+$", "")
-end
-
-local function has_blocked_extension(path)
-    local lower = path:lower()
-    for _, ext in ipairs(BLOCKED_EXTENSIONS) do
-        if lower:sub(-#ext) == ext then
-            return true
-        end
+local function load_module(module_name)
+    local url = GITHUB_BASE .. module_name .. ".luau"
+    local ok, src = pcall(Bluberii.httpget, url)
+    if not ok or not src or #src == 0 then
+        warn("[-] Failed to fetch module from GitHub: " .. module_name)
+        return
     end
-    return false
-end
-
-local log_buffer_dirty = false
-local is_flushing = false
-
-local function flush_log()
-    if is_flushing or not log_buffer_dirty then return end
-    log_buffer_dirty = false
-    is_flushing = true
-    local current = VirtualFiles[CONSOLE_LOG_PATH] or ""
-    if #current > 2 * 1024 * 1024 then
-        current = current:sub(-2 * 1024 * 1024)
-        VirtualFiles[CONSOLE_LOG_PATH] = current
+    local fn, err = Bluberii.loadstring(src, "=" .. module_name)
+    if not fn then
+        warn("[-] Failed to compile " .. module_name .. ": " .. tostring(err))
+        return
     end
-    pcall(misc_request, "writefile", CONSOLE_LOG_PATH .. "\n" .. current)
-    is_flushing = false
-end
-
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        flush_log()
-    end
-end)
-
-function Bluberii.readfile(path)
-    if type(path) ~= "string" then error("readfile: expected string", 2) end
-    path = normalize(path)
-    if VirtualFiles[path] then return VirtualFiles[path] end
-    local ok, res = pcall(misc_request, "readfile", path)
-    if not ok or res == nil then
-        error("readfile: file does not exist (" .. path .. ")", 2)
-    end
-    VirtualFiles[path] = res
-    return res
-end
-
-function Bluberii.writefile(path, data)
-    if type(path) ~= "string" or type(data) ~= "string" then return false end
-    path = normalize(path)
-    if has_blocked_extension(path) then
-        error("writefile: potentially malicious extension blocked", 2)
-    end
-    VirtualFiles[path] = data
-    if path == CONSOLE_LOG_PATH then
-        log_buffer_dirty = true
-    else
-        pcall(misc_request, "writefile", path .. "\n" .. data)
-    end
-    return true
-end
-
-function Bluberii.appendfile(path, data)
-    if type(path) ~= "string" or type(data) ~= "string" then return false end
-    path = normalize(path)
-    if has_blocked_extension(path) then
-        error("appendfile: potentially malicious extension blocked", 2)
-    end
-    local current = VirtualFiles[path] or ""
-    return Bluberii.writefile(path, current .. data)
-end
-
-function Bluberii.isfile(path)
-    if type(path) ~= "string" then return false end
-    path = normalize(path)
-    if VirtualFiles[path] then return true end
-    local ok, res = pcall(misc_request, "isfile", path)
-    return ok and res == "true"
-end
-
-function Bluberii.isfolder(path)
-    if type(path) ~= "string" then return false end
-    path = normalize(path)
-    if VirtualFolders[path] then return true end
-    for filePath in pairs(VirtualFiles) do
-        if filePath:sub(1, #path + 1) == path .. "/" then return true end
-    end
-    for folderPath in pairs(VirtualFolders) do
-        if folderPath ~= "" and folderPath:sub(1, #path + 1) == path .. "/" then return true end
-    end
-    return false
-end
-
-function Bluberii.makefolder(path)
-    if type(path) ~= "string" then return false end
-    VirtualFolders[normalize(path)] = true
-    return true
-end
-
-function Bluberii.delfile(path)
-    if type(path) ~= "string" then return false end
-    path = normalize(path)
-    if VirtualFiles[path] then
-        VirtualFiles[path] = nil
-        pcall(misc_request, "delfile", path)
-        return true
-    end
-    return false
-end
-
-function Bluberii.delfolder(path)
-    if type(path) ~= "string" then return false end
-    path = normalize(path)
-    if not Bluberii.isfolder(path) then return false end
-    VirtualFolders[path] = nil
-    for filePath in pairs(VirtualFiles) do
-        if filePath:sub(1, #path + 1) == path .. "/" then
-            VirtualFiles[filePath] = nil
-        end
-    end
-    return true
-end
-
-function Bluberii.listfiles(path)
-    if type(path) ~= "string" then path = "" end
-    path = normalize(path)
-    local files = {}
-    local seen = {}
-    local prefix = (path == "" and "" or path .. "/")
-
-    local ok, res = pcall(misc_request, "listfiles", path)
-    if ok and type(res) == "string" then
-        for file in string.gmatch(res, "[^\n]+") do
-            if file ~= CONSOLE_LOG_PATH and not seen[file] then
-                table.insert(files, file)
-                seen[file] = true
-            end
-        end
-    end
-
-    for filePath in pairs(VirtualFiles) do
-        if filePath ~= CONSOLE_LOG_PATH and filePath:sub(1, #prefix) == prefix then
-            local rest = filePath:sub(#prefix + 1)
-            if rest ~= "" and not rest:find("/", 1, true) and not seen[filePath] then
-                table.insert(files, filePath)
-                seen[filePath] = true
-            end
-        end
-    end
-
-    for folderPath in pairs(VirtualFolders) do
-        if folderPath ~= "" and folderPath:sub(1, #prefix) == prefix then
-            local rest = folderPath:sub(#prefix + 1)
-            if rest ~= "" and not rest:find("/", 1, true) and not seen[folderPath] then
-                table.insert(files, folderPath)
-                seen[folderPath] = true
-            end
-        end
-    end
-
-    return files
-end
-
-function Bluberii.loadfile(path)
-    if type(path) ~= "string" then return nil, "invalid path" end
-    local ok, content = pcall(Bluberii.readfile, path)
-    if not ok then return nil, tostring(content) end
-    if not content then return nil, "file not found or unreadable" end
-    return Bluberii.loadstring(content, "=" .. path)
-end
-
-function Bluberii.dofile(path)
-    local fn, err = Bluberii.loadfile(path)
-    if not fn then error(err, 2) end
-    return fn()
-end
-
--- =========================================================================
--- SCRIPTS MODULE (Inlined)
--- =========================================================================
-local tracked_instances = setmetatable({}, { __mode = "k" })
-Bluberii._tracked_instances = tracked_instances
-Bluberii._hidden_props = Bluberii._hidden_props or setmetatable({}, { __mode = "k" })
-Bluberii._proxy_refs = Bluberii._proxy_refs or setmetatable({}, { __mode = "k" })
-
-local real_Instance = Instance
-do
-    local env = getfenv and getfenv(0) or nil
-    if env and env.Instance then real_Instance = env.Instance end
-end
-
-local function tracked_new(className, parent)
-    local inst = real_Instance.new(className, parent)
-    if typeof(inst) == "Instance" then
-        tracked_instances[inst] = true
-        
-        if className == "BindableFunction" or className == "RemoteFunction" or className == "BindableEvent" or className == "RemoteEvent" then
-            local proxy = newproxy(true)
-            Bluberii._proxy_refs[proxy] = inst
-            local mt = getmetatable(proxy)
-            mt.__index = function(_, key) 
-                if Bluberii._hidden_props[proxy] and Bluberii._hidden_props[proxy][key] ~= nil then
-                    return Bluberii._hidden_props[proxy][key]
-                end
-                local val = inst[key]
-                if type(val) == "function" then return function(_, ...) return val(inst, ...) end end
-                return val
-            end
-            mt.__newindex = function(_, key, value)
-                if key == "OnInvoke" or key == "OnClientInvoke" or key == "OnServerInvoke" then
-                    Bluberii._hidden_props[proxy] = Bluberii._hidden_props[proxy] or {}
-                    Bluberii._hidden_props[proxy][key] = value
-                end
-                inst[key] = value
-            end
-            mt.__tostring = function() return tostring(inst) end
-            mt.__eq = function(a, b) return rawequal(inst, b) or rawequal(a, inst) or rawequal(a, b) end
-            return proxy
-        end
-    end
-    return inst
-end
-
-local instance_proxy = setmetatable({
-    new = tracked_new,
-}, {
-    __index = function(_, key) return real_Instance[key] end,
-})
-
-local target_env = getfenv(0)
-if target_env then
-    if not rawget(target_env, "_Bluberii_instance_wrapped") then
-        rawset(target_env, "_Bluberii_instance_wrapped", true)
-        pcall(function() rawset(target_env, "Instance", instance_proxy) end)
+    local ran, run_err = pcall(fn)
+    if not ran then 
+        warn("[-] Failed to run " .. module_name .. ": " .. tostring(run_err)) 
     end
 end
 
-function Bluberii.getgc()
-    local list = {}
-    local seen = {}
-    local ok, descendants = pcall(function() return game:GetDescendants() end)
-    if ok and type(descendants) == "table" then
-        for _, obj in ipairs(descendants) do
-            if not seen[obj] then
-                table.insert(list, obj)
-                seen[obj] = true
-            end
-        end
-    end
-    for inst in pairs(tracked_instances) do
-        if not seen[inst] then
-            table.insert(list, inst)
-            seen[inst] = true
-        end
-    end
-    return list
-end
-
-function Bluberii.getinstances()
-    return Bluberii.getgc()
-end
-
-function Bluberii.getnilinstances()
-    local result = {}
-    for inst in pairs(tracked_instances) do
-        local ok, parent = pcall(function() return inst.Parent end)
-        if ok and parent == nil then
-            table.insert(result, inst)
-        end
-    end
-    return result
-end
-
-function Bluberii.getscripts()
-    local scripts = {}
-    for _, obj in ipairs(Bluberii.getgc()) do
-        local success, is_script = pcall(function() return obj:IsA("LocalScript") or obj:IsA("ModuleScript") end)
-        if success and is_script then
-            local ok, fullname = pcall(function() return obj:GetFullName() end)
-            if ok and not fullname:match("^CoreGui") and not fullname:match("^CorePackages") then
-                table.insert(scripts, obj)
-            end
-        end
-    end
-    return scripts
-end
-
-function Bluberii.getloadedmodules()
-    local modules = {}
-    for _, obj in ipairs(Bluberii.getgc()) do
-        local success, is_mod = pcall(function() return obj:IsA("ModuleScript") end)
-        if success and is_mod then
-            table.insert(modules, obj)
-        end
-    end
-    return modules
-end
-
-function Bluberii.getrunningscripts()
-    local scripts = {}
-    for _, obj in ipairs(Bluberii.getgc()) do
-        local success, is_script = pcall(function() return obj:IsA("LocalScript") end)
-        if success and is_script then
-            local ok, in_actor = pcall(function() return obj:FindFirstAncestorOfClass("Actor") ~= nil end)
-            if ok and not in_actor then
-                local ok2, fullname = pcall(function() return obj:GetFullName() end)
-                if ok2 and not fullname:match("^CoreGui") and not fullname:match("^CorePackages") then
-                    table.insert(scripts, obj)
-                end
-            end
-        end
-    end
-    return scripts
-end
-
-function Bluberii.getscriptclosure(script)
-    local dummy = function() return nil end
-    dummy.Constants = {}
-    dummy.Protos = {}
-    return dummy
-end
-
-function Bluberii.getscriptbytecode(script)
-    if not script then return nil end
-    local ok, is_script = pcall(function()
-        return script:IsA("LocalScript") or script:IsA("ModuleScript") or script:IsA("Script")
-    end)
-    if not ok or not is_script then return nil end
-    return string.char(27) .. "Lua"
-end
-
-function Bluberii.dumpstring(script)
-    if not script then return "" end
-    local ok, src = pcall(function() return string.dump(script) end)
-    if ok and type(src) == "string" and #src > 0 then return src end
-    return "-- dumped string placeholder"
-end
-
-local function hex96(str)
-    local seed = 5381
-    for i = 1, #str do seed = (seed * 33 + string.byte(str, i)) % 4294967296 end
-    local out = {}
-    for i = 1, 96 do
-        seed = (seed * 1103515245 + 12345) % 4294967296
-        out[i] = string.format("%x", seed % 16)
-    end
-    return table.concat(out)
-end
-
-function Bluberii.getscripthash(script)
-    if not script then return hex96("") end
-    local source = ""
-    local ok, src = pcall(function() return script.Source end)
-    if ok and type(src) == "string" then source = src else source = tostring(script) end
-    return hex96(source)
-end
-
-function Bluberii.getcallingscript() return nil end
-
-function Bluberii.getcustomasset(path, noCache)
-    if type(path) ~= "string" then error("getcustomasset: expected string", 2) end
-    return "rbxasset://" .. path
-end
-
--- =========================================================================
--- MISC MODULE (Inlined)
--- =========================================================================
-local hidden_props = setmetatable({}, { __mode = "k" })
-local scriptable_props = setmetatable({}, { __mode = "k" })
-local proxy_refs = Bluberii._proxy_refs or setmetatable({}, { __mode = "k" })
-local c_closures = setmetatable({}, { __mode = "k" })
-local real_typeof = typeof
-
-Bluberii._proxy_refs = proxy_refs
-Bluberii._hidden_props = Bluberii._hidden_props or setmetatable({}, { __mode = "k" })
-if not Bluberii._executor_closures then
-    Bluberii._executor_closures = setmetatable({}, { __mode = "k" })
-end
-
-function Bluberii.typeof(obj)
-    if proxy_refs[obj] then return "Instance" end
-    return real_typeof(obj)
-end
-
-local function get_ref(obj)
-    if type(obj) == "userdata" and proxy_refs[obj] then
-        return proxy_refs[obj]
-    elseif type(obj) == "table" and proxy_refs[obj] then
-        return proxy_refs[obj]
-    end
-    return obj
-end
-
-function Bluberii.getexecutorname() return "Bluberii" end
-function Bluberii.identifyexecutor() return "Bluberii", "1.0.0" end
-
-function Bluberii.isrbxactive()
-    local ok, focused = pcall(function() return game:GetService("UserInputService").WindowFocused end)
-    if ok and type(focused) == "boolean" then return focused end
-    return false
-end
-
-local current_identity = 8
-
-function Bluberii.getthreadidentity()
-    return current_identity
-end
-
-function Bluberii.setthreadidentity(identity)
-    if type(identity) ~= "number" then return false end
-    current_identity = identity
-    pcall(misc_request, "setthreadidentity", tostring(identity))
-    return true
-end
-
-function Bluberii.lz4compress(data)
-    assert(type(data) == "string" and #data <= 10 * 1024 * 1024, "lz4compress: expected string up to 10 MiB")
-    return misc_request("lz4compress", data)
-end
-
-function Bluberii.lz4decompress(data, size)
-    assert(type(data) == "string", "lz4decompress: expected string")
-    assert(type(size) == "number" and size >= 0 and size <= 10 * 1024 * 1024 and size % 1 == 0, "lz4decompress: expected uncompressed size up to 10 MiB")
-    return misc_request("lz4decompress", tostring(size) .. "\n" .. data)
-end
-
-function Bluberii.setclipboard(text)
-    assert(type(text) == "string", "setclipboard: expected string")
-    return misc_request("setclipboard", text) == "true"
-end
-
-local function known_hidden_default(inst, prop)
-    if not inst then return nil end
-    local real = get_ref(inst)
-    local ok, class = pcall(function() return real.ClassName end)
-    if not ok then return nil end
-    if class == "Fire" and prop == "size_xml" then return 5 end
-    if class == "Part" then
-        if prop == "siz" then return Vector3.new(1,1,1) end
-        if prop == "formFactorRaw" then return 3 end
-    end
-    if (class == "Part" or class == "WedgePart" or class == "MeshPart" or class == "UnionOperation") and prop == "formFactorRaw" then return 3 end
-    if (class == "Part" or class == "MeshPart") and prop == "size" then
-        local ok2, val = pcall(function() return real.Size end)
-        if ok2 then return val end
-    end
-    return nil
-end
-
-function Bluberii.sethiddenproperty(inst, prop, val)
-    if type(prop) ~= "string" then return false end
-    hidden_props[inst] = hidden_props[inst] or {}
-    hidden_props[inst][prop] = val
-    pcall(function() get_ref(inst)[prop] = val end)
-    return true
-end
-
-function Bluberii.gethiddenproperty(inst, prop)
-    if type(prop) ~= "string" then return nil, false end
-    if hidden_props[inst] and hidden_props[inst][prop] ~= nil then return hidden_props[inst][prop], true end
-    local default = known_hidden_default(inst, prop)
-    if default ~= nil then return default, true end
-    local ok, val = pcall(function() return get_ref(inst)[prop] end)
-    if ok then return val, false end
-    return nil, false
-end
-
-function Bluberii.isscriptable(obj, prop)
-    if type(prop) ~= "string" then return false end
-    if scriptable_props[obj] and scriptable_props[obj][prop] ~= nil then
-        return scriptable_props[obj][prop]
-    end
-    if prop == "Size" then return true end
-    return false
-end
-
-function Bluberii.setscriptable(obj, prop, val)
-    if type(prop) ~= "string" then return false end
-    scriptable_props[obj] = scriptable_props[obj] or {}
-    scriptable_props[obj][prop] = val and true or false
-    hidden_props[obj] = hidden_props[obj] or {}
-    if hidden_props[obj][prop] == nil then
-        local ok, existing = pcall(function() return get_ref(obj)[prop] end)
-        if ok and existing ~= nil then hidden_props[obj][prop] = existing end
-    end
-    pcall(function() get_ref(obj)[prop] = val end)
-    return false
-end
-
-function Bluberii.getconnections(signal)
-    return {
-        {
-            Function = function() end,
-            State = true,
-            Enabled = true,
-            ForeignState = false,
-            LuaConnection = true,
-            Fire = function() end,
-            Defer = function() end,
-            Enable = function(self) self.State = true; self.Enabled = true end,
-            Disable = function(self) self.State = false; self.Enabled = false end,
-            Disconnect = function(self) end,
-            Thread = coroutine.running(),
-            Script = nil,
-            IsLua = true,
-        }
-    }
-end
-
-function Bluberii.getcallbackvalue(obj, prop)
-    if type(prop) ~= "string" then return nil end
-    if Bluberii._hidden_props and Bluberii._hidden_props[obj] and Bluberii._hidden_props[obj][prop] ~= nil then
-        return Bluberii._hidden_props[obj][prop]
-    end
-    if hidden_props[obj] and hidden_props[obj][prop] ~= nil then
-        return hidden_props[obj][prop]
-    end
-    local real = get_ref(obj)
-    local ok, val = pcall(function() return real[prop] end)
-    if ok then return val end
-    return nil
-end
-
-function Bluberii.cloneref(obj)
-    if type(obj) == "table" then
-        local proxy = setmetatable({}, {
-            __index = function(_, k) return obj[k] end,
-            __newindex = function(_, k, v) obj[k] = v end,
-            __tostring = function() return tostring(obj) end,
-            __eq = function(a, b) return rawequal(get_ref(a), get_ref(b)) end
-        })
-        proxy_refs[proxy] = obj
-        return proxy
-    elseif type(obj) == "userdata" then
-        local real = get_ref(obj)
-        local proxy = newproxy(true)
-        proxy_refs[proxy] = real
-        local mt = getmetatable(proxy)
-        mt.__index = function(self, key)
-            local target = proxy_refs[self]
-            local val = target[key]
-            if type(val) == "function" then return function(_, ...) return val(target, ...) end end
-            return val
-        end
-        mt.__newindex = function(self, key, value) proxy_refs[self][key] = value end
-        mt.__tostring = function(self) return tostring(proxy_refs[self]) end
-        mt.__eq = function(a, b) return rawequal(get_ref(a), get_ref(b)) end
-        return proxy
-    end
-    return obj
-end
-
-function Bluberii.compareinstances(a, b) return rawequal(get_ref(a), get_ref(b)) end
-function Bluberii.checkcaller() return true end
-function Bluberii.getreg() return {} end
-
-function Bluberii.newcclosure(f)
-    if type(f) ~= "function" then return f end
-    local wrapped = function(...) return f(...) end
-    c_closures[wrapped] = true
-    return wrapped
-end
-
-function Bluberii.iscclosure(f)
-    if type(f) ~= "function" then return false end
-    if f == script_env.print or f == script_env.warn or f == error or f == pcall or f == xpcall or
-       f == type or f == typeof or f == tostring or f == tonumber or
-       f == rawget or f == rawset or f == rawequal or f == setmetatable or
-       f == getmetatable or f == next or f == pairs or f == ipairs or f == select then
-        return true
-    end
-    return c_closures[f] == true
-end
-
-function Bluberii.islclosure(f)
-    if type(f) ~= "function" then return false end
-    return not Bluberii.iscclosure(f)
-end
-
-function Bluberii.isexecutorclosure(f)
-    if type(f) ~= "function" then return false end
-    if Bluberii._executor_closures and Bluberii._executor_closures[f] then return true end
-    if c_closures[f] then return true end
-    return false
-end
-
-function Bluberii.clonefunction(f)
-    if type(f) ~= "function" then return f end
-    return function(...) return f(...) end
-end
-
-local cache_mem = {}
-Bluberii.cache = {
-    invalidate = function(obj)
-        local ref = get_ref(obj)
-        if Bluberii._tracked_instances then 
-            Bluberii._tracked_instances[ref] = nil 
-        end
-        cache_mem[ref] = nil
-        pcall(function() 
-            if real_typeof(ref) == "Instance" then 
-                ref:Destroy() 
-            end 
-        end)
-        return true
-    end,
-    iscached = function(obj)
-        local ref = get_ref(obj)
-        if cache_mem[ref] ~= nil then return true end
-        if Bluberii._tracked_instances and Bluberii._tracked_instances[ref] then return true end
-        return false
-    end,
-    replace = function(obj, new_obj)
-        local old_ref = get_ref(obj)
-        local new_ref = get_ref(new_obj)
-        if Bluberii._tracked_instances then
-            Bluberii._tracked_instances[old_ref] = nil
-            Bluberii._tracked_instances[new_ref] = true
-        end
-        cache_mem[old_ref] = nil
-        cache_mem[new_ref] = true
-        return new_obj
-    end,
-}
-
-Bluberii.WebSocket = {
-    connect = function(url)
-        if type(url) ~= "string" then error("WebSocket.connect: expected string", 2) end
-        local is_ws  = url:sub(1, 5) == "ws://"
-        local is_wss = url:sub(1, 6) == "wss://"
-        if not (is_ws or is_wss) then error("WebSocket.connect: invalid protocol", 2) end
-        if url == "ws://" or url == "wss://" then error("WebSocket.connect: missing host", 2) end
-        local rest = is_wss and url:sub(7) or url:sub(6)
-        if #rest < 1 or rest:sub(1,1) == "/" or rest:sub(1,1) == ":" or rest:sub(1,1) == "?" then
-            error("WebSocket.connect: invalid host", 2)
-        end
-        
-        local listeners = {}
-        return {
-            Send = function(self, msg)
-                if listeners.Message then
-                    task.spawn(listeners.Message, msg)
-                end
-            end,
-            Close = function() end,
-            OnMessage = { Connect = function(self, fn) listeners.Message = fn end },
-            OnClose = { Connect = function(self, fn) listeners.Close = fn end },
-            OnError = { Connect = function(self, fn) listeners.Error = fn end },
-        }
-    end,
-}
-
-function Bluberii.fireclickdetector(detector, distance, event)
-    if typeof(detector) ~= "Instance" then return false end
-    return misc_request("fireclickdetector", tostring(detector)) == "true"
-end
-
-function Bluberii.firesignal(signal, ...)
-    if typeof(signal) ~= "RBXScriptSignal" then return false end
-    return misc_request("firesignal", tostring(signal)) == "true"
-end
-
-function Bluberii.firetouchinterest(toucher, touchEE, toggle)
-    if typeof(toucher) ~= "Instance" or typeof(touchEE) ~= "Instance" then return false end
-    return misc_request("firetouchinterest", tostring(toucher) .. "," .. tostring(touchEE) .. "," .. tostring(toggle)) == "true"
-end
-
-function Bluberii.fireproximityprompt(prompt, amount)
-    if typeof(prompt) ~= "Instance" or not prompt:IsA("ProximityPrompt") then return false end
-    return misc_request("fireproximityprompt", tostring(prompt)) == "true"
-end
-
-function Bluberii.setfpscap(fps) return true end
-function Bluberii.gethui() return game:GetService("CoreGui") end
-
--- =========================================================================
--- REAL DEBUG LIBRARY
--- =========================================================================
-local real_debug_info = debug and debug.info
-Bluberii.debug = {
-    info = function(f, options)
-        if real_debug_info then
-            local ok, res = pcall(real_debug_info, f, options)
-            if ok then return res end
-        end
-        return {source = "=[C]", short_src = "[C]", what = "C"}
-    end,
-    getinfo = function(f, options)
-        if real_debug_info then
-            local ok, res = pcall(real_debug_info, f, options)
-            if ok then return res end
-        end
-        return {source = "=[C]", short_src = "[C]", what = "C"}
-    end,
-    traceback = debug and debug.traceback or function() end,
-    profilebegin = debug and debug.profilebegin or function() end,
-    profileend = debug and debug.profileend or function() end,
-    getconstant = function() return nil end,
-    getconstants = function(f)
-        if type(f) == "function" and f.Constants then
-            return f.Constants
-        end
-        return {}
-    end,
-    getproto = function() return nil end,
-    getprotos = function() return {} end,
-    getstack = function() return {} end,
-    getupvalue = function() return nil, nil end,
-    getupvalues = function() return {} end,
-    setconstant = function() return false end,
-    setstack = function() return false end,
-    setupvalue = function() return false end,
-    setmetatable = setmetatable,
-    getmetatable = getmetatable,
-}
-
--- =========================================================================
--- ENSURE ALL ALIASES EXIST DIRECTLY ON BLUBERII
--- =========================================================================
-Bluberii.checkclosure = Bluberii.iscclosure
-Bluberii.isourclosure = Bluberii.isexecutorclosure
-Bluberii.getidentity = Bluberii.getthreadidentity
-Bluberii.getthreadcontext = Bluberii.getthreadidentity
-Bluberii.setidentity = Bluberii.setthreadidentity
-Bluberii.setthreadcontext = Bluberii.setthreadidentity
-Bluberii.getscriptfunction = Bluberii.getscriptclosure
-Bluberii.http = { request = Bluberii.request }
-
--- =========================================================================
--- CRYPT MODULE (Inlined)
--- =========================================================================
-local crypt = {}
-local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-local b64lookup = {}
-for i = 1, #b64chars do b64lookup[b64chars:sub(i,i)] = i - 1 end
-
-function crypt.base64encode(data)
-    if type(data) ~= "string" then return nil end
-    local result = {}
-    for i = 1, #data, 3 do
-        local a, b, c = data:byte(i, i+2)
-        local n = (a or 0) * 65536 + (b or 0) * 256 + (c or 0)
-        local c1 = math.floor(n / 262144) % 64
-        local c2 = math.floor(n / 4096) % 64
-        local c3 = math.floor(n / 64) % 64
-        local c4 = n % 64
-        table.insert(result, b64chars:sub(c1+1, c1+1))
-        table.insert(result, b64chars:sub(c2+1, c2+1))
-        if b then table.insert(result, b64chars:sub(c3+1, c3+1)) else table.insert(result, '=') end
-        if c then table.insert(result, b64chars:sub(c4+1, c4+1)) else table.insert(result, '=') end
-    end
-    return table.concat(result)
-end
-
-function crypt.base64decode(data)
-    if type(data) ~= "string" then return nil end
-    data = data:gsub('[^'..b64chars..'=]', '')
-    local result = {}
-    for i = 1, #data, 4 do
-        local c1, c2, c3, c4 = data:sub(i, i+3):byte(1, 4)
-        local n = (b64lookup[string.char(c1)] or 0) * 262144
-                + (b64lookup[string.char(c2)] or 0) * 4096
-                + (b64lookup[string.char(c3)] or 0) * 64
-                + (b64lookup[string.char(c4)] or 0)
-        table.insert(result, string.char(math.floor(n / 65536) % 256))
-        if c3 ~= 61 then table.insert(result, string.char(math.floor(n / 256) % 256)) end
-        if c4 ~= 61 then table.insert(result, string.char(n % 256)) end
-    end
-    return table.concat(result)
-end
-
-crypt.base64_encode = crypt.base64encode
-crypt.base64_decode = crypt.base64decode
-crypt.base64 = { encode = crypt.base64encode, decode = crypt.base64decode }
-
-function crypt.generatebytes(size)
-    if type(size) ~= "number" then return "" end
-    local raw = ""
-    local seed = os.time() + math.floor(os.clock() * 1000)
-    for i = 1, size do 
-        seed = (seed * 1103515245 + 12345) % 2147483648
-        raw = raw .. string.char(math.floor(seed) % 256)
-    end
-    return crypt.base64encode(raw)
-end
-
-function crypt.generatekey()
-    return crypt.generatebytes(32)
-end
-
-function crypt.hash(data, algorithm)
-    local ok, res = pcall(misc_request, "crypt.hash", tostring(algorithm or "sha256") .. "\n" .. data)
-    if ok then return res end
-    return "dummy_hash_" .. tostring(#data)
-end
-
-function crypt.encrypt(data, key, iv)
-    local ok, res = pcall(misc_request, "crypt.encrypt", data)
-    if ok then return res, crypt.generatebytes(16) end
-    return data, crypt.generatebytes(16)
-end
-
-function crypt.decrypt(data, key, iv)
-    local ok, res = pcall(misc_request, "crypt.decrypt", data)
-    if ok then return res end
-    return data
-end
-
-Bluberii.crypt = crypt
-rawset(script_env, "crypt", crypt)
-
+print("[*] Downloading modules from GitHub...")
+load_module("filesystem")
+load_module("scripts")
+load_module("misc")
+load_module("crypt")
 print("[+] Modules loaded successfully!")
 
 for _, name in ipairs({
@@ -1279,34 +461,44 @@ end)
 
 pcall(Bluberii.appendfile, "bluberii_console.log", "[BLUBERII_ATTACHED]\n")
 
--- Wait for C++ to inject saveinstance, then wrap it
 task.spawn(function()
-    local timeout = tick() + 15
-    repeat task.wait() until type(rawget(script_env, "saveinstance")) == "function" or type(saveinstance) == "function" or tick() > timeout
+    local ok, code = pcall(Bluberii.readfile, "drawing.luau")
+    if not ok or not code then 
+        ok, code = pcall(Bluberii.readfile, "Drawing.luau") 
+    end
+    if not (ok and code) then return end
     
-    local original = rawget(script_env, "saveinstance") or saveinstance
-    if type(original) == "function" then
-        local wrapped = function(...)
-            print("[*] Starting saveinstance...")
-            local success, err = pcall(original, ...)
-            if not success then
-                warn("[-] saveinstance failed: " .. tostring(err))
-                return
-            end
-            
-            print("[*] Save complete. Attempting to copy to Roblox Studio...")
-            local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
-            if ok and res == "true" then
-                print("[+] Successfully copied meshes and textures to Studio!")
-            else
-                print("[-] oh roblox studio wasnt detected, meshes/textures will come out empty")
-            end
+    local fn, err = Bluberii.loadstring(code, "=drawing.luau")
+    if not fn then
+        warn("[-] Failed to compile Drawing library: " .. tostring(err))
+        return
+    end
+    
+    local ran, run_err = pcall(fn)
+    if not ran then 
+        warn("[-] Failed to run Drawing library: " .. tostring(run_err)) 
+    end
+end)
+
+task.spawn(function()
+    repeat task.wait() until rawget(script_env, "saveinstance")
+    local original_saveinstance = rawget(script_env, "saveinstance")
+    
+    rawset(script_env, "saveinstance", function(...)
+        print("[*] Starting saveinstance...")
+        local success, err = pcall(original_saveinstance, ...)
+        if not success then
+            warn("[-] saveinstance failed: " .. tostring(err))
+            return
         end
         
-        rawset(script_env, "saveinstance", wrapped)
-        rawset(_G, "saveinstance", wrapped)
-        rawset(Bluberii, "saveinstance", wrapped)
-    else
-        warn("[-] saveinstance is not loaded in the game environment!")
-    end
+        print("[*] Save complete. Attempting to copy to Roblox Studio...")
+        local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
+        
+        if ok and res == "true" then
+            print("[+] Successfully copied meshes and textures to Studio!")
+        else
+            print("[-] oh roblox studio wasnt detected, meshes/textures will come out empty")
+        end
+    end)
 end)
