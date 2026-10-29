@@ -1,7 +1,5 @@
-local script_env = (getgenv and getgenv()) or getfenv(0)
-
-local Bluberii = rawget(script_env, "Bluberii") or {}
-rawset(script_env, "Bluberii", Bluberii)
+local script_env = getfenv(0)
+local Bluberii = script_env.Bluberii or {}
 
 local old_mt = getmetatable(script_env)
 local old_index = type(old_mt) == "table" and old_mt.__index or nil
@@ -14,49 +12,20 @@ end
 new_mt.__index = function(_, key)
     local val = rawget(Bluberii, key)
     if val ~= nil then return val end
-    if type(old_index) == "function" then
-        local ok, res = pcall(old_index, script_env, key)
-        if ok and res ~= nil then return res end
-    elseif type(old_index) == "table" then
-        if old_index[key] ~= nil then return old_index[key] end
-    end
-    local real_global = (getgenv and getgenv()) or rawget(script_env, "_G")
-    if real_global and real_global ~= script_env then
-        return real_global[key]
-    end
+    if type(old_index) == "function" then return old_index(script_env, key) end
+    if type(old_index) == "table" then return old_index[key] end
     return nil
 end
 
 setmetatable(script_env, new_mt)
-
-rawset(script_env, "_G", script_env)
-if rawget(script_env, "shared") == nil then
-    rawset(script_env, "shared", {})
-end
-
-for _, name in ipairs({
-    "getexecutorname", "identifyexecutor", "getgenv", "cloneref", "compareinstances", "checkcaller",
-    "getnamecallmethod", "clonefunction", "cache", "newcclosure", "iscclosure", "islclosure", "isexecutorclosure",
-    "getreg", "getgc", "getloadedmodules", "getinstances", "getnilinstances", "getscripts",
-    "getcallingscript", "httpget", "request", "misc_request", "loadstring", "loadfile", "dofile",
-    "readfile", "writefile", "appendfile", "isfile", "isfolder", "makefolder", "delfile", "delfolder", "listfiles",
-    "setclipboard", "lz4compress", "lz4decompress", "setfpscap", "sethiddenproperty", "gethiddenproperty", "gethui",
-    "isrbxactive", "getrunningscripts", "getscriptbytecode", "dumpstring", "getscripthash",
-    "getconnections", "getcallbackvalue", "fireclickdetector", "getcustomasset", "isscriptable", "setscriptable",
-    "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
-    "getscriptclosure"
-}) do
-    local fn = rawget(script_env, name) or (getgenv and getgenv()[name]) or _G[name] or Bluberii[name]
-    if fn then
-        rawset(script_env, name, fn)
-        Bluberii[name] = fn
-    end
-end
+rawset(script_env, "Bluberii", Bluberii)
+rawset(script_env, "_G", Bluberii)
+rawset(script_env, "shared", {})
 
 if Bluberii.typeof then rawset(script_env, "typeof", Bluberii.typeof) end
 if Bluberii.debug then rawset(script_env, "debug", Bluberii.debug) end
 
-Bluberii.getgenv = function() return script_env end
+Bluberii.getgenv = function() return Bluberii end
 rawset(script_env, "getgenv", Bluberii.getgenv)
 
 print("[*] Loading...")
@@ -412,7 +381,8 @@ function Bluberii.misc_request(op, payload)
     return response.Body
 end
 
-local VirtualFiles = {}
+local CONSOLE_LOG_PATH = "bluberii_console.log"
+local VirtualFiles   = {}
 local VirtualFolders = { [""] = true }
 
 local BLOCKED_EXTENSIONS = {
@@ -436,6 +406,29 @@ local function has_blocked_extension(path)
     return false
 end
 
+local log_buffer_dirty = false
+local is_flushing = false
+
+local function flush_log()
+    if is_flushing or not log_buffer_dirty then return end
+    log_buffer_dirty = false
+    is_flushing = true
+    local current = VirtualFiles[CONSOLE_LOG_PATH] or ""
+    if #current > 2 * 1024 * 1024 then
+        current = current:sub(-2 * 1024 * 1024)
+        VirtualFiles[CONSOLE_LOG_PATH] = current
+    end
+    pcall(misc_request, "writefile", CONSOLE_LOG_PATH .. "\n" .. current)
+    is_flushing = false
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        flush_log()
+    end
+end)
+
 function Bluberii.readfile(path)
     if type(path) ~= "string" then error("readfile: expected string", 2) end
     path = normalize(path)
@@ -455,7 +448,11 @@ function Bluberii.writefile(path, data)
         error("writefile: potentially malicious extension blocked", 2)
     end
     VirtualFiles[path] = data
-    pcall(misc_request, "writefile", path .. "\n" .. data)
+    if path == CONSOLE_LOG_PATH then
+        log_buffer_dirty = true
+    else
+        pcall(misc_request, "writefile", path .. "\n" .. data)
+    end
     return true
 end
 
@@ -530,7 +527,7 @@ function Bluberii.listfiles(path)
     local ok, res = pcall(misc_request, "listfiles", path)
     if ok and type(res) == "string" then
         for file in string.gmatch(res, "[^\n]+") do
-            if not seen[file] then
+            if file ~= CONSOLE_LOG_PATH and not seen[file] then
                 table.insert(files, file)
                 seen[file] = true
             end
@@ -538,7 +535,7 @@ function Bluberii.listfiles(path)
     end
 
     for filePath in pairs(VirtualFiles) do
-        if filePath:sub(1, #prefix) == prefix then
+        if filePath ~= CONSOLE_LOG_PATH and filePath:sub(1, #prefix) == prefix then
             local rest = filePath:sub(#prefix + 1)
             if rest ~= "" and not rest:find("/", 1, true) and not seen[filePath] then
                 table.insert(files, filePath)
@@ -556,6 +553,7 @@ function Bluberii.listfiles(path)
             end
         end
     end
+
     return files
 end
 
@@ -573,68 +571,17 @@ function Bluberii.dofile(path)
     return fn()
 end
 
-local tracked_instances = setmetatable({}, { __mode = "k" })
-Bluberii._tracked_instances = tracked_instances
-Bluberii._hidden_props = Bluberii._hidden_props or setmetatable({}, { __mode = "k" })
-Bluberii._proxy_refs = Bluberii._proxy_refs or setmetatable({}, { __mode = "k" })
-
-local real_Instance = Instance
-do
-    local env = getfenv and getfenv(0) or nil
-    if env and env.Instance then real_Instance = env.Instance end
-end
-
-local function tracked_new(className, parent)
-    local inst = real_Instance.new(className, parent)
-    if typeof(inst) == "Instance" then
-        tracked_instances[inst] = true
-        
-        if className == "BindableFunction" or className == "RemoteFunction" or className == "BindableEvent" or className == "RemoteEvent" then
-            local proxy = newproxy(true)
-            Bluberii._proxy_refs[proxy] = inst
-            local mt = getmetatable(proxy)
-            mt.__index = function(_, key) 
-                if Bluberii._hidden_props[proxy] and Bluberii._hidden_props[proxy][key] ~= nil then
-                    return Bluberii._hidden_props[proxy][key]
-                end
-                local val = inst[key]
-                if type(val) == "function" then return function(_, ...) return val(inst, ...) end end
-                return val
-            end
-            mt.__newindex = function(_, key, value)
-                if key == "OnInvoke" or key == "OnClientInvoke" or key == "OnServerInvoke" then
-                    Bluberii._hidden_props[proxy] = Bluberii._hidden_props[proxy] or {}
-                    Bluberii._hidden_props[proxy][key] = value
-                end
-                inst[key] = value
-            end
-            mt.__tostring = function() return tostring(inst) end
-            mt.__eq = function(a, b) return rawequal(inst, b) or rawequal(a, inst) or rawequal(a, b) end
-            return proxy
-        end
-    end
-    return inst
-end
-
-local instance_proxy = setmetatable({
-    new = tracked_new,
-}, {
-    __index = function(_, key) return real_Instance[key] end,
-})
-
-local target_env = getfenv(0)
-if target_env then
-    if not rawget(target_env, "_Bluberii_instance_wrapped") then
-        rawset(target_env, "_Bluberii_instance_wrapped", true)
-        pcall(function() rawset(target_env, "Instance", instance_proxy) end)
-    end
-end
-
 local hidden_props = setmetatable({}, { __mode = "k" })
 local scriptable_props = setmetatable({}, { __mode = "k" })
-local proxy_refs = Bluberii._proxy_refs
+local proxy_refs = Bluberii._proxy_refs or setmetatable({}, { __mode = "k" })
 local c_closures = setmetatable({}, { __mode = "k" })
 local real_typeof = typeof
+
+Bluberii._proxy_refs = proxy_refs
+Bluberii._hidden_props = Bluberii._hidden_props or setmetatable({}, { __mode = "k" })
+if not Bluberii._executor_closures then
+    Bluberii._executor_closures = setmetatable({}, { __mode = "k" })
+end
 
 function Bluberii.typeof(obj)
     if proxy_refs[obj] then return "Instance" end
@@ -661,7 +608,10 @@ end
 
 local current_identity = 8
 
-function Bluberii.getthreadidentity() return current_identity end
+function Bluberii.getthreadidentity()
+    return current_identity
+end
+
 function Bluberii.setthreadidentity(identity)
     if type(identity) ~= "number" then return false end
     current_identity = identity
@@ -879,6 +829,33 @@ Bluberii.cache = {
     end,
 }
 
+Bluberii.WebSocket = {
+    connect = function(url)
+        if type(url) ~= "string" then error("WebSocket.connect: expected string", 2) end
+        local is_ws  = url:sub(1, 5) == "ws://"
+        local is_wss = url:sub(1, 6) == "wss://"
+        if not (is_ws or is_wss) then error("WebSocket.connect: invalid protocol", 2) end
+        if url == "ws://" or url == "wss://" then error("WebSocket.connect: missing host", 2) end
+        local rest = is_wss and url:sub(7) or url:sub(6)
+        if #rest < 1 or rest:sub(1,1) == "/" or rest:sub(1,1) == ":" or rest:sub(1,1) == "?" then
+            error("WebSocket.connect: invalid host", 2)
+        end
+        
+        local listeners = {}
+        return {
+            Send = function(self, msg)
+                if listeners.Message then
+                    task.spawn(listeners.Message, msg)
+                end
+            end,
+            Close = function() end,
+            OnMessage = { Connect = function(self, fn) listeners.Message = fn end },
+            OnClose = { Connect = function(self, fn) listeners.Close = fn end },
+            OnError = { Connect = function(self, fn) listeners.Error = fn end },
+        }
+    end,
+}
+
 function Bluberii.fireclickdetector(detector, distance, event)
     if typeof(detector) ~= "Instance" then return false end
     return misc_request("fireclickdetector", tostring(detector)) == "true"
@@ -949,6 +926,63 @@ Bluberii.setthreadcontext = Bluberii.setthreadidentity
 Bluberii.getscriptfunction = Bluberii.getscriptclosure
 Bluberii.http = { request = Bluberii.request }
 
+local tracked_instances = setmetatable({}, { __mode = "k" })
+Bluberii._tracked_instances = tracked_instances
+Bluberii._hidden_props = Bluberii._hidden_props or setmetatable({}, { __mode = "k" })
+Bluberii._proxy_refs = Bluberii._proxy_refs or setmetatable({}, { __mode = "k" })
+
+local real_Instance = Instance
+do
+    local env = getfenv and getfenv(0) or nil
+    if env and env.Instance then real_Instance = env.Instance end
+end
+
+local function tracked_new(className, parent)
+    local inst = real_Instance.new(className, parent)
+    if typeof(inst) == "Instance" then
+        tracked_instances[inst] = true
+        
+        if className == "BindableFunction" or className == "RemoteFunction" or className == "BindableEvent" or className == "RemoteEvent" then
+            local proxy = newproxy(true)
+            Bluberii._proxy_refs[proxy] = inst
+            local mt = getmetatable(proxy)
+            mt.__index = function(_, key) 
+                if Bluberii._hidden_props[proxy] and Bluberii._hidden_props[proxy][key] ~= nil then
+                    return Bluberii._hidden_props[proxy][key]
+                end
+                local val = inst[key]
+                if type(val) == "function" then return function(_, ...) return val(inst, ...) end end
+                return val
+            end
+            mt.__newindex = function(_, key, value)
+                if key == "OnInvoke" or key == "OnClientInvoke" or key == "OnServerInvoke" then
+                    Bluberii._hidden_props[proxy] = Bluberii._hidden_props[proxy] or {}
+                    Bluberii._hidden_props[proxy][key] = value
+                end
+                inst[key] = value
+            end
+            mt.__tostring = function() return tostring(inst) end
+            mt.__eq = function(a, b) return rawequal(inst, b) or rawequal(a, inst) or rawequal(a, b) end
+            return proxy
+        end
+    end
+    return inst
+end
+
+local instance_proxy = setmetatable({
+    new = tracked_new,
+}, {
+    __index = function(_, key) return real_Instance[key] end,
+})
+
+local target_env = getfenv(0)
+if target_env then
+    if not rawget(target_env, "_Bluberii_instance_wrapped") then
+        rawset(target_env, "_Bluberii_instance_wrapped", true)
+        pcall(function() rawset(target_env, "Instance", instance_proxy) end)
+    end
+end
+
 function Bluberii.getgc()
     local list = {}
     local seen = {}
@@ -970,7 +1004,9 @@ function Bluberii.getgc()
     return list
 end
 
-function Bluberii.getinstances() return Bluberii.getgc() end
+function Bluberii.getinstances()
+    return Bluberii.getgc()
+end
 
 function Bluberii.getnilinstances()
     local result = {}
@@ -1470,6 +1506,23 @@ getgenv().setrenderproperty = function(obj, prop, value)
     obj[prop] = value
 end
 
+for _, name in ipairs({
+    "getexecutorname", "identifyexecutor", "getgenv", "cloneref", "compareinstances", "checkcaller",
+    "getnamecallmethod", "clonefunction", "cache", "newcclosure", "iscclosure", "islclosure", "isexecutorclosure",
+    "getreg", "getgc", "getloadedmodules", "getinstances", "getnilinstances", "getscripts",
+    "getcallingscript", "httpget", "request", "misc_request", "loadstring", "loadfile", "dofile",
+    "readfile", "writefile", "appendfile", "isfile", "isfolder", "makefolder", "delfile", "delfolder", "listfiles",
+    "setclipboard", "lz4compress", "lz4decompress", "setfpscap", "sethiddenproperty", "gethiddenproperty", "gethui",
+    "isrbxactive", "getrunningscripts", "getscriptbytecode", "dumpstring", "getscripthash",
+    "getconnections", "getcallbackvalue", "fireclickdetector", "getcustomasset", "isscriptable", "setscriptable",
+    "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
+    "getscriptclosure"
+}) do
+    if Bluberii[name] then
+        rawset(script_env, name, Bluberii[name])
+    end
+end
+
 local function set_alias(alias, original)
     local fn = rawget(script_env, original)
     if fn then rawset(script_env, alias, fn) end
@@ -1488,7 +1541,23 @@ set_alias("getscriptfunction", "getscriptclosure")
 
 rawset(script_env, "http", { request = Bluberii.request })
 
-print("[+] Modules loaded successfully!")
+pcall(Bluberii.writefile, "bluberii_console.log", "")
+
+local LogService = game:GetService("LogService")
+local last_msg = ""
+
+LogService.MessageOut:Connect(function(message, msg_type)
+    if message == last_msg then return end
+    last_msg = message
+    local level = "print"
+    if msg_type == Enum.MessageType.MessageWarning then level = "warn"
+    elseif msg_type == Enum.MessageType.MessageError then level = "error" end
+    task.spawn(function()
+        pcall(Bluberii.appendfile, "bluberii_console.log", string.format("[%s] [%s] %s\n", os.date("%H:%M:%S"), level, message))
+    end)
+end)
+
+pcall(Bluberii.appendfile, "bluberii_console.log", "[BLUBERII_ATTACHED]\n")
 
 task.spawn(function()
     local deadline = tick() + 30
@@ -1505,5 +1574,6 @@ task.spawn(function()
     end
 
     rawset(script_env, "saveinstance", wrapped)
+    rawset(_G, "saveinstance", wrapped)
     rawset(Bluberii, "saveinstance", wrapped)
 end)
