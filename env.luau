@@ -34,6 +34,26 @@ if rawget(script_env, "shared") == nil then
     rawset(script_env, "shared", {})
 end
 
+-- Copy executor functions FIRST so load_module can use readfile
+for _, name in ipairs({
+    "getexecutorname", "identifyexecutor", "getgenv", "cloneref", "compareinstances", "checkcaller",
+    "getnamecallmethod", "clonefunction", "cache", "newcclosure", "iscclosure", "islclosure", "isexecutorclosure",
+    "getreg", "getgc", "getloadedmodules", "getinstances", "getnilinstances", "getscripts",
+    "getcallingscript", "httpget", "request", "misc_request", "loadstring", "loadfile", "dofile",
+    "readfile", "writefile", "appendfile", "isfile", "isfolder", "makefolder", "delfile", "delfolder", "listfiles",
+    "setclipboard", "lz4compress", "lz4decompress", "setfpscap", "sethiddenproperty", "gethiddenproperty", "gethui",
+    "isrbxactive", "getrunningscripts", "getscriptbytecode", "dumpstring", "getscripthash",
+    "getconnections", "getcallbackvalue", "fireclickdetector", "getcustomasset", "isscriptable", "setscriptable",
+    "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
+    "getscriptclosure"
+}) do
+    local fn = rawget(script_env, name) or (getgenv and getgenv()[name]) or _G[name] or Bluberii[name]
+    if fn then
+        rawset(script_env, name, fn)
+        Bluberii[name] = fn
+    end
+end
+
 if Bluberii.typeof then rawset(script_env, "typeof", Bluberii.typeof) end
 if Bluberii.debug then rawset(script_env, "debug", Bluberii.debug) end
 
@@ -406,9 +426,14 @@ local function asset_failure(module_name, reason)
 end
 
 local function load_module(module_name)
-    local readfile_fn = Bluberii.readfile or script_env.readfile
+    local readfile_fn = Bluberii.readfile 
+        or rawget(script_env, "readfile") 
+        or (getgenv and getgenv().readfile) 
+        or (getfenv and getfenv(0).readfile) 
+        or _G.readfile
+        
     if type(readfile_fn) ~= "function" then
-        asset_failure(module_name, "readfile is not available")
+        asset_failure(module_name, "readfile is not available in your executor")
     end
     local ok, src = pcall(readfile_fn, module_name .. ".luau")
     if not ok or not src or #src == 0 then
@@ -431,25 +456,6 @@ load_module("misc")
 load_module("crypt")
 load_module("drawing")
 print("[+] Modules loaded successfully!")
-
-for _, name in ipairs({
-    "getexecutorname", "identifyexecutor", "getgenv", "cloneref", "compareinstances", "checkcaller",
-    "getnamecallmethod", "clonefunction", "cache", "newcclosure", "iscclosure", "islclosure", "isexecutorclosure",
-    "getreg", "getgc", "getloadedmodules", "getinstances", "getnilinstances", "getscripts",
-    "getcallingscript", "httpget", "request", "misc_request", "loadstring", "loadfile", "dofile",
-    "readfile", "writefile", "appendfile", "isfile", "isfolder", "makefolder", "delfile", "delfolder", "listfiles",
-    "setclipboard", "lz4compress", "lz4decompress", "setfpscap", "sethiddenproperty", "gethiddenproperty", "gethui",
-    "isrbxactive", "getrunningscripts", "getscriptbytecode", "dumpstring", "getscripthash",
-    "getconnections", "getcallbackvalue", "fireclickdetector", "getcustomasset", "isscriptable", "setscriptable",
-    "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
-    "getscriptclosure"
-}) do
-    local fn = Bluberii[name] or script_env[name]
-    if fn then
-        rawset(script_env, name, fn)
-        Bluberii[name] = fn
-    end
-end
 
 local function set_alias(alias, original)
     local fn = rawget(script_env, original)
