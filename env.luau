@@ -406,11 +406,11 @@ local function asset_failure(module_name, reason)
 end
 
 local function load_module(module_name)
-    local readfile = rawget(script_env, "readfile") or Bluberii.readfile
-    if type(readfile) ~= "function" then
+    local readfile_fn = Bluberii.readfile or script_env.readfile
+    if type(readfile_fn) ~= "function" then
         asset_failure(module_name, "readfile is not available")
     end
-    local ok, src = pcall(readfile, module_name .. ".luau")
+    local ok, src = pcall(readfile_fn, module_name .. ".luau")
     if not ok or not src or #src == 0 then
         asset_failure(module_name, "readfile failed or file is empty")
     end
@@ -444,8 +444,10 @@ for _, name in ipairs({
     "firesignal", "firetouchinterest", "fireproximityprompt", "getthreadidentity", "setthreadidentity",
     "getscriptclosure"
 }) do
-    if Bluberii[name] then
-        rawset(script_env, name, Bluberii[name])
+    local fn = Bluberii[name] or script_env[name]
+    if fn then
+        rawset(script_env, name, fn)
+        Bluberii[name] = fn
     end
 end
 
@@ -489,29 +491,16 @@ task.spawn(function()
     local deadline = tick() + 30
     repeat task.wait() until type(saveinstance) == "function" or tick() > deadline
     if type(saveinstance) ~= "function" then
-        warn("[-] saveinstance never loaded")
         return
     end
 
     local original = saveinstance
     local wrapped = function(...)
-        print("[*] Starting saveinstance...")
         local success, err = pcall(original, ...)
-        if not success then
-            warn("[-] saveinstance failed: " .. tostring(err))
-            return
-        end
-
-        print("[*] Save complete. Attempting to copy to Roblox Studio...")
-        local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
-        if ok and res == "true" then
-            print("[+] Successfully copied meshes and textures to Studio!")
-        else
-            print("[-] Roblox Studio wasn't detected, meshes/textures will come out empty")
-        end
+        if not success then return end
+        pcall(Bluberii.misc_request, "copytostudio", "")
     end
 
-    rawset(script_env, "saveinstance", wrapped)
     rawset(script_env, "saveinstance", wrapped)
     rawset(Bluberii, "saveinstance", wrapped)
 end)
