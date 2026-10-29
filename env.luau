@@ -42,7 +42,13 @@ rawset(script_env, "getgenv", Bluberii.getgenv)
 
 print("[*] Loading...")
 
+-- ─────────────────────────────────────────────────────────────
+-- FIXED: Added Game ID (PlaceId) and JobId logging for frontend
+-- ─────────────────────────────────────────────────────────────
 task.spawn(function()
+    -- Immediately log the Game ID so the C# UI knows where we are
+    print(string.format("[+] Game Info -> PlaceId: %d | JobId: %s", game.PlaceId, tostring(game.JobId)))
+
     local Players = game:GetService("Players")
     repeat task.wait() until Players.LocalPlayer
     print(string.format("[+] Logged in as: %s (UserID: %d)", Players.LocalPlayer.Name, Players.LocalPlayer.UserId))
