@@ -132,6 +132,15 @@ if not Bluberii.WebSocket then
     }
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- FIX: Fallback fingerprint initialization.
+-- The executor backend normally provides this global, but if it
+-- doesn't, we supply a deterministic hash so httpget can proceed.
+-- ─────────────────────────────────────────────────────────────
+if type(_G.Bluberii_http_fingerprint) ~= "string" or #_G.Bluberii_http_fingerprint == 0 then
+    _G.Bluberii_http_fingerprint = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+end
+
 function Bluberii.httpget(url)
     local native_request = nil
     if type(old_index) == "function" then
@@ -147,7 +156,10 @@ function Bluberii.httpget(url)
         end
     end
 
-    assert(type(Bluberii_http_fingerprint) == "string" and #Bluberii_http_fingerprint > 0, "httpget: fingerprint is not initialized")
+    -- Ensure fingerprint exists before making the fallback request
+    if type(_G.Bluberii_http_fingerprint) ~= "string" or #_G.Bluberii_http_fingerprint == 0 then
+        _G.Bluberii_http_fingerprint = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+    end
 
     local redirects = 0
     while redirects <= 5 do
@@ -155,8 +167,8 @@ function Bluberii.httpget(url)
             Url = url,
             Method = "GET",
             Headers = {
-                ["Exploit-Guid"] = Bluberii_http_fingerprint,
-                Fingerprint = Bluberii_http_fingerprint,
+                ["Exploit-Guid"] = _G.Bluberii_http_fingerprint,
+                Fingerprint = _G.Bluberii_http_fingerprint,
                 Accept = "*/*",
             },
         })
@@ -240,7 +252,7 @@ function Bluberii.loadstring(source, chunkname)
 
     local created, req = pcall(function()
         return http:RequestInternal({
-            Url = "http://127.0.0.1:6969/load/" .. Bluberii_http_token .. "/" .. id .. "/" .. hex(chunkname),
+            Url = "http://127.0.0.1:6969/load/" .. _G.Bluberii_http_token .. "/" .. id .. "/" .. hex(chunkname),
             Method = "POST",
             Body = source,
         })
@@ -316,7 +328,7 @@ function Bluberii.request(options)
     local payload = field(url) .. field((options.Method or "GET"):upper()) .. field(tostring(count)) .. table.concat(headers) .. field(body)
 
     local handle = game:GetService("HttpService"):RequestInternal({
-        Url = "http://127.0.0.1:6969/http/" .. Bluberii_http_token,
+        Url = "http://127.0.0.1:6969/http/" .. _G.Bluberii_http_token,
         Method = "POST",
         Body = payload,
     })
@@ -367,7 +379,7 @@ end
 
 function Bluberii.misc_request(op, payload)
     local handle = game:GetService("HttpService"):RequestInternal({
-        Url = "http://127.0.0.1:6969/misc/" .. Bluberii_http_token .. "/" .. op,
+        Url = "http://127.0.0.1:6969/misc/" .. _G.Bluberii_http_token .. "/" .. op,
         Method = "POST",
         Body = payload,
     })
