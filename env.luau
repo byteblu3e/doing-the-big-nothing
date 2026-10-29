@@ -1,5 +1,7 @@
-local script_env = getfenv(0)
-local Bluberii = script_env.Bluberii or {}
+local script_env = (getgenv and getgenv()) or getfenv(0)
+
+local Bluberii = rawget(script_env, "Bluberii") or {}
+rawset(script_env, "Bluberii", Bluberii)
 
 local old_mt = getmetatable(script_env)
 local old_index = type(old_mt) == "table" and old_mt.__index or nil
@@ -12,20 +14,30 @@ end
 new_mt.__index = function(_, key)
     local val = rawget(Bluberii, key)
     if val ~= nil then return val end
-    if type(old_index) == "function" then return old_index(script_env, key) end
-    if type(old_index) == "table" then return old_index[key] end
+    if type(old_index) == "function" then
+        local ok, res = pcall(old_index, script_env, key)
+        if ok and res ~= nil then return res end
+    elseif type(old_index) == "table" then
+        if old_index[key] ~= nil then return old_index[key] end
+    end
+    local real_global = (getgenv and getgenv()) or rawget(script_env, "_G")
+    if real_global and real_global ~= script_env then
+        return real_global[key]
+    end
     return nil
 end
 
 setmetatable(script_env, new_mt)
-rawset(script_env, "Bluberii", Bluberii)
-rawset(script_env, "_G", Bluberii)
-rawset(script_env, "shared", {})
+
+rawset(script_env, "_G", script_env)
+if rawget(script_env, "shared") == nil then
+    rawset(script_env, "shared", {})
+end
 
 if Bluberii.typeof then rawset(script_env, "typeof", Bluberii.typeof) end
 if Bluberii.debug then rawset(script_env, "debug", Bluberii.debug) end
 
-Bluberii.getgenv = function() return Bluberii end
+Bluberii.getgenv = function() return script_env end
 rawset(script_env, "getgenv", Bluberii.getgenv)
 
 print("[*] Loading...")
@@ -381,20 +393,34 @@ function Bluberii.misc_request(op, payload)
     return response.Body
 end
 
+local function asset_failure(module_name, reason)
+    local msg = string.format(
+        "[Bluberii] Hey, we failed to load necessary assets! "
+        .. "It may be because of your wifi or the modules might be broken! "
+        .. "Please rejoin to try again. If this issue persists, please contact @byteblu3 on discord.\n"
+        .. "Module: %s\nReason: %s",
+        module_name,
+        tostring(reason)
+    )
+    error(msg, 0)
+end
+
 local function load_module(module_name)
-    local ok, src = pcall(Bluberii.readfile, module_name .. ".luau")
+    local readfile = rawget(script_env, "readfile") or Bluberii.readfile
+    if type(readfile) ~= "function" then
+        asset_failure(module_name, "readfile is not available")
+    end
+    local ok, src = pcall(readfile, module_name .. ".luau")
     if not ok or not src or #src == 0 then
-        warn("[-] Missing module: " .. module_name .. ".luau")
-        return
+        asset_failure(module_name, "readfile failed or file is empty")
     end
     local fn, err = Bluberii.loadstring(src, "=" .. module_name)
     if not fn then
-        warn("[-] Failed to compile " .. module_name .. ": " .. tostring(err))
-        return
+        asset_failure(module_name, "loadstring failed: " .. tostring(err))
     end
     local ran, run_err = pcall(fn)
     if not ran then
-        warn("[-] Failed to run " .. module_name .. ": " .. tostring(run_err))
+        asset_failure(module_name, "runtime error: " .. tostring(run_err))
     end
 end
 
@@ -486,6 +512,6 @@ task.spawn(function()
     end
 
     rawset(script_env, "saveinstance", wrapped)
-    rawset(_G, "saveinstance", wrapped)
+    rawset(script_env, "saveinstance", wrapped)
     rawset(Bluberii, "saveinstance", wrapped)
 end)
