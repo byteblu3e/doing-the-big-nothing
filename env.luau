@@ -381,13 +381,14 @@ function Bluberii.misc_request(op, payload)
     return response.Body
 end
 
-local GITHUB_BASE = "https://raw.githubusercontent.com/byteblu3e/Bluberri-Decompiler/refs/heads/main/"
+----------------------------------------------------------------------
+-- LOCAL MODULE LOADING (filesystem / scripts / misc / crypt / drawing)
+----------------------------------------------------------------------
 
 local function load_module(module_name)
-    local url = GITHUB_BASE .. module_name .. ".luau"
-    local ok, src = pcall(Bluberii.httpget, url)
+    local ok, src = pcall(Bluberii.readfile, module_name .. ".luau")
     if not ok or not src or #src == 0 then
-        warn("[-] Failed to fetch module from GitHub: " .. module_name)
+        warn("[-] Missing module: " .. module_name .. ".luau")
         return
     end
     local fn, err = Bluberii.loadstring(src, "=" .. module_name)
@@ -396,16 +397,17 @@ local function load_module(module_name)
         return
     end
     local ran, run_err = pcall(fn)
-    if not ran then 
-        warn("[-] Failed to run " .. module_name .. ": " .. tostring(run_err)) 
+    if not ran then
+        warn("[-] Failed to run " .. module_name .. ": " .. tostring(run_err))
     end
 end
 
-print("[*] Downloading modules from GitHub...")
+print("[*] Loading modules...")
 load_module("filesystem")
 load_module("scripts")
 load_module("misc")
 load_module("crypt")
+load_module("drawing")
 print("[+] Modules loaded successfully!")
 
 for _, name in ipairs({
@@ -461,44 +463,37 @@ end)
 
 pcall(Bluberii.appendfile, "bluberii_console.log", "[BLUBERII_ATTACHED]\n")
 
-task.spawn(function()
-    local ok, code = pcall(Bluberii.readfile, "drawing.luau")
-    if not ok or not code then 
-        ok, code = pcall(Bluberii.readfile, "Drawing.luau") 
-    end
-    if not (ok and code) then return end
-    
-    local fn, err = Bluberii.loadstring(code, "=drawing.luau")
-    if not fn then
-        warn("[-] Failed to compile Drawing library: " .. tostring(err))
-        return
-    end
-    
-    local ran, run_err = pcall(fn)
-    if not ran then 
-        warn("[-] Failed to run Drawing library: " .. tostring(run_err)) 
-    end
-end)
+----------------------------------------------------------------------
+-- WRAP saveinstance ONCE IT APPEARS (set by C++ InitScripts)
+----------------------------------------------------------------------
 
 task.spawn(function()
-    repeat task.wait() until rawget(script_env, "saveinstance")
-    local original_saveinstance = rawget(script_env, "saveinstance")
-    
-    rawset(script_env, "saveinstance", function(...)
+    local deadline = tick() + 30
+    repeat task.wait() until type(saveinstance) == "function" or tick() > deadline
+    if type(saveinstance) ~= "function" then
+        warn("[-] saveinstance never loaded")
+        return
+    end
+
+    local original = saveinstance
+    local wrapped = function(...)
         print("[*] Starting saveinstance...")
-        local success, err = pcall(original_saveinstance, ...)
+        local success, err = pcall(original, ...)
         if not success then
             warn("[-] saveinstance failed: " .. tostring(err))
             return
         end
-        
+
         print("[*] Save complete. Attempting to copy to Roblox Studio...")
         local ok, res = pcall(Bluberii.misc_request, "copytostudio", "")
-        
         if ok and res == "true" then
             print("[+] Successfully copied meshes and textures to Studio!")
         else
-            print("[-] oh roblox studio wasnt detected, meshes/textures will come out empty")
+            print("[-] Roblox Studio wasn't detected, meshes/textures will come out empty")
         end
-    end)
+    end
+
+    rawset(script_env, "saveinstance", wrapped)
+    rawset(_G, "saveinstance", wrapped)
+    rawset(Bluberii, "saveinstance", wrapped)
 end)
